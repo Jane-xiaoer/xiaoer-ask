@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>小耳问问</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="mode-lookup">
+<header id="topbar">
+  <div id="ctx-chip">
+    <span id="ctx-icon">👂</span>
+    <span id="ctx-app">Xiaoer Ask</span>
+    <span id="ctx-mode"></span>
+  </div>
+  <button id="btn-close" title="关闭 (Esc)">✕</button>
+</header>
+
+<!-- 选中文字的回显（秒查模式专用） -->
+<div id="lookup-head" hidden>
+  <span id="lookup-label">[释义]</span>
+  <span id="lookup-term"></span>
+</div>
+
+<!-- 上下文折叠预览 -->
+<div id="ctx-preview" class="collapsed">
+  <button id="ctx-toggle">[+] 展开上下文</button>
+  <div id="ctx-body"></div>
+</div>
+
+<!-- 对话区 -->
+<div id="chat"></div>
+
+<!-- 秒查模式下的「继续问」按钮 -->
+<div id="followup-bar" hidden>
+  <button id="btn-followup">[C] 继续追问</button>
+</div>
+
+<!-- 输入框（对话模式才显示） -->
+<form id="input-form" hidden>
+  <textarea id="input" placeholder="想问点什么…（点「发送」提交，回车换行）" rows="2"></textarea>
+  <button type="submit" id="btn-send">send ↩</button>
+</form>
+
+<script src="app.js"></script>
+</body>
+</html>

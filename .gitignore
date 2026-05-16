@@ -1,0 +1,27 @@
+# Local secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+
+# Runtime artifacts (screenshots, captured context)
+tmp/
+*.png
+*.jpg
+*.jpeg
+
+# Author's private notes (not for public)
+CLAUDE.md
+.CLAUDE.md*
+.private/
+*.bak
+
+# macOS junk
+.DS_Store
+._*
+
+# Editor junk
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
