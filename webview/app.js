@@ -2,9 +2,15 @@
 // 注入：window.XIAOER_CTX  / window.XIAOER_GEMINI  / window.xiaoerClose
 
 const MODEL = "gemini-2.5-flash";
-// 默认官方直连；若私有层注入了计量代理（小耳 AI 花销墙），则走代理记账后转发
-const API_BASE = (typeof window !== "undefined" && window.XIAOER_METER_BASE)
-  || "https://generativelanguage.googleapis.com/v1beta";
+// API_BASE 仅用于公开用户的直连路径。
+// 私有层（Jane 本机，在国内）开了花销墙计量 → 走 meterOn() 分支：整条请求交给
+// Hammerspoon 用 hs.http 走本地代理（→Clash→Google，可靠且透明记账）。
+// 不让 webview 自己 fetch 明文 http://127.0.0.1 —— WKWebView 的 ATS 会拦明文，
+// 报 "Load failed"；而 hs.http 不受 webview ATS 限制。
+const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+// ⚠️ window.XIAOER_METER_BASE 是 Hammerspoon 在 didFinishNavigation 里注入的，
+// 时机晚于本脚本顶层求值——必须在「提问时」惰性读取，不能在加载时锁成 const。
+function meterOn() { return typeof window !== "undefined" && !!window.XIAOER_METER_BASE; }
 
 const $ctxApp    = document.getElementById("ctx-app");
 const $ctxMode   = document.getElementById("ctx-mode");
@@ -154,53 +160,23 @@ async function ask(question) {
     generationConfig: { temperature: 0.4, maxOutputTokens: 1024 },
   };
 
-  const url = `${API_BASE}/models/${MODEL}:streamGenerateContent?alt=sse&key=${API_KEY}`;
-
   let acc = "";
   try {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Xiaoer-Tool": "xiaoer-ask" },
-      body: JSON.stringify(body),
-    });
-    if (!resp.ok) {
-      const txt = await resp.text();
+    if (meterOn()) {
+      // 这台机子开了花销墙 = 在国内：直连 Google 不稳，且 WKWebView ATS 拦明文本地代理。
+      // 交给 Lua 用 hs.http 走本地代理（→Clash→Google，可靠且透明记账），一次性拿全文。
+      acc = await askViaLua(body);
       aiBubble.classList.remove("thinking");
-      setError(`API ${resp.status}: ${txt.slice(0, 200)}`);
-      isAsking = false;
-      return;
-    }
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const data = line.slice(6).trim();
-        if (!data || data === "[DONE]") continue;
-        try {
-          const j = JSON.parse(data);
-          const text = j?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          if (text) {
-            acc += text;
-            if (aiBubble.classList.contains("thinking")) {
-              aiBubble.classList.remove("thinking");
-              aiBubble.classList.add("streaming");
-            }
-            renderMd(aiBubble, acc);
-            $chat.scrollTop = $chat.scrollHeight;
-          }
-        } catch (e) {}
-      }
+      renderMd(aiBubble, acc);
+      $chat.scrollTop = $chat.scrollHeight;
+    } else {
+      // 公开用户：webview 直连 Google 流式（ATS 放行 https，无代理需求）
+      acc = await askDirectStream(body, aiBubble);
     }
   } catch (e) {
     aiBubble.classList.remove("thinking");
-    setError(`网络错误: ${e.message}`);
+    aiBubble.classList.remove("streaming");
+    setError(e.message || String(e));
     isAsking = false;
     return;
   }
@@ -209,6 +185,86 @@ async function ask(question) {
   isAsking = false;
   if (!acc) { setError("AI 没返回内容"); return; }
   history.push({ role: "model", text: acc });
+}
+
+// ── 经 Lua → 本地花销墙代理（hs.http，国内可靠 + 自动记账）──────────
+// Lua 收到 "llm:{id,body}" → hs.http POST 代理 streamGenerateContent →
+// 把完整 SSE body 注回 window.__xiaoerLLM(id, status, text)。这里用 Promise 等它。
+const __llmPending = {};
+let __llmSeq = 0;
+// Lua 注入单个对象 { id, status, body }（body = 完整 SSE 文本）
+window.__xiaoerLLM = function(o) {
+  const { id, status, body: payload } = o || {};
+  const p = __llmPending[id];
+  if (!p) return;
+  delete __llmPending[id];
+  if (status !== 200) { p.reject(new Error(`API ${status}: ${String(payload).slice(0, 200)}`)); return; }
+  // payload 是完整 SSE 文本，逐行拼出答案
+  let acc = "";
+  for (const line of String(payload).split("\n")) {
+    if (!line.startsWith("data:")) continue;
+    const d = line.slice(5).trim();
+    if (!d || d === "[DONE]") continue;
+    try { acc += JSON.parse(d)?.candidates?.[0]?.content?.parts?.[0]?.text || ""; } catch (e) {}
+  }
+  p.resolve(acc);
+};
+function askViaLua(body) {
+  return new Promise((resolve, reject) => {
+    const id = "q" + (++__llmSeq);
+    __llmPending[id] = { resolve, reject };
+    setTimeout(() => {
+      if (__llmPending[id]) { delete __llmPending[id]; reject(new Error("网络错误: 本地代理超时")); }
+    }, 30000);
+    try {
+      window.webkit.messageHandlers.xiaoer.postMessage("llm:" + JSON.stringify({ id, body }));
+    } catch (e) {
+      delete __llmPending[id];
+      reject(new Error("无法连接本地代理：" + e.message));
+    }
+  });
+}
+
+// ── webview 直连 Google 流式（公开用户路径）─────────────────────────
+async function askDirectStream(body, aiBubble) {
+  const url = `${API_BASE}/models/${MODEL}:streamGenerateContent?alt=sse&key=${API_KEY}`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Xiaoer-Tool": "xiaoer-ask" },
+    body: JSON.stringify(body),
+  }).catch((e) => { throw new Error(`网络错误: ${e.message}`); });
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`API ${resp.status}: ${txt.slice(0, 200)}`);
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "", acc = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const data = line.slice(6).trim();
+      if (!data || data === "[DONE]") continue;
+      try {
+        const text = JSON.parse(data)?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        if (text) {
+          acc += text;
+          if (aiBubble.classList.contains("thinking")) {
+            aiBubble.classList.remove("thinking");
+            aiBubble.classList.add("streaming");
+          }
+          renderMd(aiBubble, acc);
+          $chat.scrollTop = $chat.scrollHeight;
+        }
+      } catch (e) {}
+    }
+  }
+  return acc;
 }
 
 // ── 切到对话模式 ─────────────────────────────────────────────────

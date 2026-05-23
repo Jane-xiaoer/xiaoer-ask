@@ -244,6 +244,34 @@ local function showWebview(contextJson, apiKey)
       -- JS 在发送提问前要求重新抓画面（静默：不插分隔条不自动问）
       log("recapture requested by webview")
       refreshContext("", "silent")
+    elseif body:sub(1, 4) == "llm:" then
+      -- 国内路径：浮窗够不到明文本地代理（WKWebView ATS 拦），直连 Google 又不稳。
+      -- 改由 Lua 用 hs.http 走本地花销墙代理（→Clash→Google，可靠 + 透明记账），
+      -- 拿到完整 SSE body 注回 window.__xiaoerLLM(id, status, body)。
+      local ok, req = pcall(function() return hs.json.decode(body:sub(5)) end)
+      if not (ok and req and req.id and req.body) then log("llm: bad payload"); return end
+      local function reply(status, payload)
+        -- ⚠️ hs.json.encode 只吃 table（不能直接编码字符串）。把参数打包成 table 编码，
+        -- 得到的合法 JSON 直接当 JS 对象字面量注入（字符串转义由编码器负责）。
+        local js = "window.__xiaoerLLM(" ..
+          hs.json.encode({ id = req.id, status = tonumber(status) or 0, body = payload or "" }) .. ")"
+        -- 推出当前回调栈再注入，避免 message handler 重入
+        hs.timer.doAfter(0, function()
+          if activeWebview then activeWebview:evaluateJavaScript(js) end
+        end)
+      end
+      local base = readMeterBase()
+      if not base then reply(0, "无本地代理（XIAOER_METER_BASE 未配置）"); return end
+      -- 不带 key：花销墙代理会自己追加（带了会变成双 key 被 Google 拒）
+      local url = base .. "/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
+      hs.http.asyncPost(url, hs.json.encode(req.body),
+        { ["Content-Type"] = "application/json", ["X-Xiaoer-Tool"] = "xiaoer-ask" },
+        function(status, respBody)
+          if status ~= 200 then
+            log("llm: proxy " .. tostring(status) .. " " .. tostring(respBody and respBody:sub(1, 120)))
+          end
+          reply(status, respBody)
+        end)
     end
   end)
 
