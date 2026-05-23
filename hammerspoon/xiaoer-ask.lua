@@ -21,6 +21,18 @@ local function log(...)
   end
 end
 
+-- ── 读计量代理 base（私有 .env 里的 XIAOER_METER_BASE，gitignore，公开用户没有则官方直连）──
+local function readMeterBase()
+  local f = io.open(PROJECT_DIR .. "/.env", "r")
+  if not f then return nil end
+  for line in f:lines() do
+    local v = line:match("^%s*XIAOER_METER_BASE%s*=%s*(.+)$")
+    if v then f:close(); return (v:gsub("^%s+", ""):gsub("%s+$", ""):gsub("^['\"]", ""):gsub("['\"]$", "")) end
+  end
+  f:close()
+  return nil
+end
+
 -- ── 读 Gemini key（按优先级查找；缓存）────────────────────────────
 -- 1. 项目本地 .env（公共用户用这条）
 -- 2. ~/.shared-skills/api-registry/.env（原作者本地兼容）
@@ -262,6 +274,7 @@ local function showWebview(contextJson, apiKey)
         local js = string.format([[
           window.XIAOER_CTX = %s;
           window.XIAOER_GEMINI = "%s";
+          window.XIAOER_METER_BASE = "%s";
           window.xiaoerClose = function() {
             window.webkit.messageHandlers.xiaoer.postMessage("close");
           };
@@ -274,7 +287,8 @@ local function showWebview(contextJson, apiKey)
           }
         ]],
           contextJson or "{}",
-          (apiKey or ""):gsub('"', '\\"')
+          (apiKey or ""):gsub('"', '\\"'),
+          (readMeterBase() or ""):gsub('"', '\\"')
         )
         activeWebview:evaluateJavaScript(js)
       end

@@ -2,7 +2,9 @@
 // 注入：window.XIAOER_CTX  / window.XIAOER_GEMINI  / window.xiaoerClose
 
 const MODEL = "gemini-2.5-flash";
-const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+// 默认官方直连；若私有层注入了计量代理（小耳 AI 花销墙），则走代理记账后转发
+const API_BASE = (typeof window !== "undefined" && window.XIAOER_METER_BASE)
+  || "https://generativelanguage.googleapis.com/v1beta";
 
 const $ctxApp    = document.getElementById("ctx-app");
 const $ctxMode   = document.getElementById("ctx-mode");
@@ -158,7 +160,7 @@ async function ask(question) {
   try {
     const resp = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Xiaoer-Tool": "xiaoer-ask" },
       body: JSON.stringify(body),
     });
     if (!resp.ok) {
