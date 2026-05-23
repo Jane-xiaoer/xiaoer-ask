@@ -157,7 +157,15 @@ async function ask(question) {
   const body = {
     system_instruction: { parts: [{ text: buildSystemInstruction() }] },
     contents: contents,
-    generationConfig: { temperature: 0.4, maxOutputTokens: 1024 },
+    // ⚠️ Gemini 2.5 Flash 的 thinking token 和回答 token 共享 maxOutputTokens 预算。
+    // 之前 1024 太小：模型一思考（动辄 800-980 token）就把预算吃光，回答被砍到
+    // 几十 token 就撞上限硬切断。给到 8192，思考 + 长回答都留足；
+    // thinkingBudget 限制思考上限，避免它无限膨胀又吃预算。
+    generationConfig: {
+      temperature: 0.4,
+      maxOutputTokens: 8192,
+      thinkingConfig: { thinkingBudget: 2048 },
+    },
   };
 
   let acc = "";
