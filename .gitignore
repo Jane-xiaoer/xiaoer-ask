@@ -1,7 +1,7 @@
 # Local secrets — NEVER commit
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Runtime artifacts (screenshots, captured context)
 tmp/
